@@ -139,6 +139,7 @@ main > div > [style*="background-color"], [class*="actionBarBackground-backgroun
 .main-trackList-active { box-shadow: inset 3px 0 0 var(--deck-accent); }
 .main-trackList-active .main-trackList-rowTitle, .main-trackList-active .main-trackList-rowTitle * { color: var(--deck-accent) !important; }
 img[src*="equaliser"] { filter: $eq; }
+.main-trackList-rowMainContent [style*="color: rgb"] { color: var(--deck-accent2) !important; }
 
 /* The mono font runs wider than Spotify's, so rows step down a size to keep titles readable */
 .main-trackList-rowTitle, .main-trackList-rowTitle *, .Root__nav-bar [data-encore-id="listRowTitle"], .Root__nav-bar [data-encore-id="listRowTitle"] * { font-size: 14px !important; }
@@ -164,6 +165,12 @@ img[src*="equaliser"] { filter: $eq; }
 }
 .main-entityHeader-image, .main-entityHeader-imagePlaceholder { box-shadow: none !important; outline: 1px solid var(--deck-line); }
 .main-entityHeader-metaData *, .main-entityHeader-subtitle { color: var(--deck-sub) !important; }
+/* Hero photos fade into the page, so the title stays readable on a bright image */
+[data-testid="background-image"] + * {
+  background-image: linear-gradient(to bottom, color-mix(in srgb, var(--deck-bg) 10%, transparent),
+    color-mix(in srgb, var(--deck-bg) 70%, transparent) 60%, var(--deck-bg)) !important;
+}
+.main-entityHeader-headerText { text-shadow: 0 1px 10px color-mix(in srgb, var(--deck-bg) 80%, transparent); }
 
 /* ── player ── */
 .main-nowPlayingBar-container { padding-top: 3px; }
