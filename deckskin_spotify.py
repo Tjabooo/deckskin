@@ -360,9 +360,10 @@ def main_pid():
 
 
 def launch_args(pid):
-    """Reuse the running command line, so restarts keep flags like --ozone-platform=wayland."""
+    """Reuse the running command line, so restarts keep flags like --ozone-platform=wayland.
+    Chromium rewrites its process title into one space-joined string, so split on spaces rather than NULs."""
     with open(f"/proc/{pid}/cmdline", "rb") as fh:
-        args = [a.decode() for a in fh.read().split(b"\0") if a]
+        args = fh.read().replace(b"\0", b" ").decode().split()
     return [a for a in args if not a.startswith(DEBUG_FLAGS)]
 
 

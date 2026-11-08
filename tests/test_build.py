@@ -42,6 +42,14 @@ class Build(unittest.TestCase):
             )
             self.assertEqual(spotify.launch_args(1), ["/opt/spotify/spotify", "--ozone-platform=wayland"])
 
+    def test_spotify_restart_handles_the_rewritten_process_title(self):
+        with unittest.mock.patch("builtins.open") as fake:
+            fake.return_value.__enter__.return_value.read.return_value = (
+                b"/opt/spotify/spotify --enable-features=A,B --ozone-platform=wayland\0"
+            )
+            self.assertEqual(spotify.launch_args(1),
+                             ["/opt/spotify/spotify", "--enable-features=A,B", "--ozone-platform=wayland"])
+
     def test_spotify_unpatched_means_the_spa_is_back(self):
         with tempfile.TemporaryDirectory() as d:
             os.makedirs(os.path.join(d, "Apps"))
