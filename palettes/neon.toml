@@ -1,0 +1,18 @@
+# midnight neon: navy + violet/pink
+name = "Neon"
+
+[colors]
+bg        = "#0f0f1e"
+panel     = "#1a1a2f"
+line      = "#2a2a45"
+fg        = "#e0e0f0"
+subtext   = "#9d9dbf"
+dim       = "#6c6c8a"
+accent    = "#9b5de5"
+accent2   = "#f15bb5"
+deep      = "#f15bb5"
+alert     = "#ff5252"
+on_accent = "#0f0f1e"
+
+[font]
+ui = "JetBrainsMono Nerd Font"

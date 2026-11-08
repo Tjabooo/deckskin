@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""deckskin: palette-driven mouse cursor + Firefox theme in the square "deck" style.
+
+  deckskin build   PALETTE [--out DIR]        build everything into DIR (default dist/)
+  deckskin install PALETTE [--cursor] [--firefox] [--restart-firefox] [--size N]
+  deckskin preview PALETTE [--out FILE]       cursor contact sheet PNG
+
+PALETTE is a name from palettes/ (ember, neon) or a path to a .toml file.
+"""
+import argparse
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+import tomllib
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, HERE)
+import deckskin_cursor as cursor  # noqa: E402
+import deckskin_firefox as firefox  # noqa: E402
+
+DATA = os.path.join(os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")))
+BACKUPS = os.path.join(DATA, "deckskin", "backups")
+
+
+def load(arg):
+    path = arg if arg.endswith(".toml") else os.path.join(HERE, "palettes", arg + ".toml")
+    with open(path, "rb") as fh:
+        pal = tomllib.load(fh)
+    return pal, os.path.splitext(os.path.basename(path))[0]
+
+
+def say(msg):
+    print(f"\033[1m::\033[0m {msg}")
+
+
+def run(cmd, **kw):
+    return subprocess.run(cmd, capture_output=True, text=True, **kw)
+
+
+# ---------------------------------------------------------------- build
+
+def cmd_build(a):
+    pal, slug = load(a.palette)
+    out = os.path.join(a.out, slug)
+    os.makedirs(out, exist_ok=True)
+    dest, pngs = cursor.build(pal, out)
+    cursor.preview(pal, pngs, os.path.join(out, "cursors.png"))
+    chrome, content = firefox.render(pal, slug)
+    os.makedirs(os.path.join(out, "firefox", "chrome"), exist_ok=True)
+    with open(os.path.join(out, "firefox", "chrome", "userChrome.css"), "w") as fh:
+        fh.write(chrome)
+    with open(os.path.join(out, "firefox", "chrome", "userContent.css"), "w") as fh:
+        fh.write(content)
+    with open(os.path.join(out, "firefox", "user.js"), "w") as fh:
+        fh.write(firefox.prefs_block(pal))
+    say(f"built {dest}, {out}/firefox, {out}/cursors.png")
+
+
+def cmd_preview(a):
+    pal, slug = load(a.palette)
+    tmp = os.path.join("/tmp", f"deckskin-preview-{os.getpid()}")
+    try:
+        _, pngs = cursor.build(pal, tmp, hyprcursor=False)
+        cursor.preview(pal, pngs, a.out or f"{slug}-cursors.png")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    say(f"wrote {a.out or slug + '-cursors.png'}")
+
+
+# ---------------------------------------------------------------- install
+
+def set_ini_key(path, section, key, value):
+    lines = open(path).read().splitlines() if os.path.exists(path) else []
+    out, in_sec, done = [], False, False
+    for ln in lines:
+        s = ln.strip()
+        if s.startswith("["):
+            if in_sec and not done:
+                out.append(f"{key}={value}")
+                done = True
+            in_sec = s == f"[{section}]"
+        elif in_sec and s.split("=", 1)[0].strip() == key:
+            ln, done = f"{key}={value}", True
+        out.append(ln)
+    if not done:
+        if not in_sec:
+            out += ([""] if out else []) + [f"[{section}]"]
+        out.append(f"{key}={value}")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as fh:
+        fh.write("\n".join(out) + "\n")
+
+
+def install_cursor(pal, size):
+    icons = os.path.join(DATA, "icons")
+    os.makedirs(icons, exist_ok=True)
+    dest, _ = cursor.build(pal, icons)
+    theme = os.path.basename(dest)
+    say(f"cursor theme -> {dest}")
+    # XCursor fallback lookups (XWayland, toolkits that ignore settings)
+    for d in (os.path.expanduser("~/.icons/default"), os.path.join(icons, "default")):
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "index.theme"), "w") as fh:
+            fh.write(f"[Icon Theme]\nName=Default\nComment=Default cursor theme\nInherits={theme}\n")
+    for gtk in ("gtk-3.0", "gtk-4.0"):
+        ini = os.path.expanduser(f"~/.config/{gtk}/settings.ini")
+        set_ini_key(ini, "Settings", "gtk-cursor-theme-name", theme)
+        set_ini_key(ini, "Settings", "gtk-cursor-theme-size", str(size))
+    if shutil.which("gsettings"):
+        run(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", theme])
+        run(["gsettings", "set", "org.gnome.desktop.interface", "cursor-size", str(size)])
+    env = [f"XCURSOR_THEME={theme}", f"XCURSOR_SIZE={size}", f"HYPRCURSOR_THEME={theme}",
+           f"HYPRCURSOR_SIZE={size}"]
+    if shutil.which("systemctl"):
+        run(["systemctl", "--user", "set-environment", *env])
+    if shutil.which("dbus-update-activation-environment"):
+        run(["dbus-update-activation-environment", *env])
+    if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("hyprctl"):
+        r = run(["hyprctl", "setcursor", theme, str(size)])
+        say(f"hyprctl setcursor: {r.stdout.strip() or r.stderr.strip()}")
+    say("make it stick in your compositor config, e.g. Hyprland:")
+    print(f'     hl.env("XCURSOR_THEME", "{theme}")   hl.env("HYPRCURSOR_THEME", "{theme}")')
+    return theme
+
+
+def launch_firefox():
+    if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("hyprctl"):
+        r = run(["hyprctl", "dispatch", 'hl.dsp.exec_cmd("firefox")'])
+        if "ok" in r.stdout.lower():
+            return
+        r = run(["hyprctl", "dispatch", "exec", "firefox"])
+        if "ok" in r.stdout.lower():
+            return
+    subprocess.Popen(["setsid", "-f", "firefox"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def install_firefox(pal, slug, restart):
+    prof = firefox.default_profile()
+    if not prof:
+        sys.exit("no Firefox profile found (looked in ~/.config/mozilla/firefox and ~/.mozilla/firefox)")
+    chrome, content = firefox.render(pal, slug)
+    bk = os.path.join(BACKUPS, "firefox")
+    cdir = os.path.join(prof, "chrome")
+    os.makedirs(cdir, exist_ok=True)
+    for name, css in (("userChrome.css", chrome), ("userContent.css", content)):
+        path = os.path.join(cdir, name)
+        firefox.backup(path, bk)
+        with open(path, "w") as fh:
+            fh.write(css)
+    ujs = os.path.join(prof, "user.js")
+    firefox.backup(ujs, bk)
+    firefox.write_prefs_block(ujs, firefox.prefs_block(pal))
+    say(f"firefox theme -> {cdir} (+ user.js block); backups in {bk}")
+
+    pid = firefox.running_pid(prof)
+    if pid and not restart:
+        say("Firefox is running: restart it to load the theme (or re-run with --restart-firefox)")
+        return
+    if pid:
+        say(f"closing Firefox (pid {pid}) gracefully; the session comes back on restart")
+        os.kill(pid, signal.SIGTERM)
+        for _ in range(100):
+            if firefox.running_pid(prof) is None:
+                break
+            time.sleep(0.2)
+        else:
+            sys.exit("Firefox didn't exit within 20 s; close it yourself and run again")
+        time.sleep(0.5)
+    firefox.backup(os.path.join(prof, "extensions.json"), bk)
+    firefox.backup(os.path.join(prof, "prefs.js"), bk)
+    firefox.set_base_theme(prof)
+    if pid:
+        firefox.resume_once(prof)
+        launch_firefox()
+        say("Firefox relaunched")
+
+
+def cmd_install(a):
+    pal, slug = load(a.palette)
+    both = not (a.cursor or a.firefox)
+    if a.cursor or both:
+        install_cursor(pal, a.size)
+    if a.firefox or both:
+        install_firefox(pal, slug, a.restart_firefox)
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="deckskin", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    b = sub.add_parser("build", help="build cursor theme + Firefox CSS into a folder")
+    b.add_argument("palette")
+    b.add_argument("--out", default=os.path.join(HERE, "dist"))
+    b.set_defaults(fn=cmd_build)
+    p = sub.add_parser("preview", help="cursor contact sheet PNG")
+    p.add_argument("palette")
+    p.add_argument("--out")
+    p.set_defaults(fn=cmd_preview)
+    i = sub.add_parser("install", help="install + apply for the current user")
+    i.add_argument("palette")
+    i.add_argument("--cursor", action="store_true", help="only the cursor theme")
+    i.add_argument("--firefox", action="store_true", help="only the Firefox theme")
+    i.add_argument("--restart-firefox", action="store_true",
+                   help="close Firefox gracefully and reopen it with the session restored")
+    i.add_argument("--size", type=int, default=24, help="cursor size (default 24)")
+    i.set_defaults(fn=cmd_install)
+    a = ap.parse_args()
+    a.fn(a)
+
+
+if __name__ == "__main__":
+    main()

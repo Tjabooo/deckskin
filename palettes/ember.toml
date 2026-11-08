@@ -1,0 +1,18 @@
+# ember: warm charcoal + orange
+name = "Ember"
+
+[colors]
+bg        = "#120d0a"   # window / page background
+panel     = "#1b1410"   # raised surfaces: nav bar, selected tab, hover
+line      = "#3a2c22"   # 1px borders, tracks
+fg        = "#d8cbbf"   # text
+subtext   = "#b2a397"   # secondary text
+dim       = "#7a675a"   # tags, inactive tabs, spinner track
+accent    = "#ff8c1a"   # brand: 3px bars, chips, cursor outline
+accent2   = "#f5a524"   # highlights: counts, cursor details
+deep      = "#ff4d1f"   # gradient end
+alert     = "#e5484d"   # not-allowed / no-drop
+on_accent = "#120d0a"   # text on a solid accent chip
+
+[font]
+ui = "JetBrainsMono Nerd Font"
