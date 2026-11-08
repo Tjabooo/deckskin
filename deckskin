@@ -253,7 +253,7 @@ def install_spotify(pal, slug, restart, watch=False, required=True):
         run(["systemctl", "--user", "daemon-reload"])
         run(["systemctl", "--user", "enable", "--now", f"{spotify.UNIT}.path"])
         say(f"{spotify.UNIT}.path restores the theme after Spotify updates")
-    else:
+    elif run(["systemctl", "--user", "is-enabled", f"{spotify.UNIT}.path"]).stdout.strip() != "enabled":
         say("Spotify updates remove the theme: re-run `deckskin spotify-reapply`, or install with --watch to automate it")
     if restart:
         restart_spotify()
