@@ -367,10 +367,20 @@ def launch_args(pid):
 
 
 def stop(timeout=20):
-    """TERM every spotify process: the main one ignores it until its helpers are gone. Playback state survives."""
-    subprocess.run(["pkill", "-x", "spotify"], capture_output=True)
+    """Quit through MPRIS, Spotify's own clean exit. The main process ignores SIGTERM, and killing its helpers
+    crashes it, and a new instance started during the core dump sees the old lock and exits."""
+    r = subprocess.run(["busctl", "--user", "call", "org.mpris.MediaPlayer2.spotify", "/org/mpris/MediaPlayer2",
+                        "org.mpris.MediaPlayer2", "Quit"], capture_output=True)
+    if r.returncode != 0:
+        return False
     for _ in range(timeout * 5):
         if main_pid() is None:
             return True
         time.sleep(0.2)
     return False
+
+
+def stayed_up(settle=8):
+    """True once Spotify has run for a few seconds: a blocked instance exits right after starting."""
+    time.sleep(settle)
+    return main_pid() is not None
