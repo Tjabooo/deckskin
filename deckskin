@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""deckskin: palette-driven mouse cursor + Firefox theme in the square "deck" style.
+"""deckskin: palette-driven mouse cursor, Firefox and Spotify themes in the square "deck" style.
 
   deckskin build   PALETTE [--out DIR]        build everything into DIR (default dist/)
-  deckskin install PALETTE [--cursor] [--firefox] [--restart-firefox] [--size N]
+  deckskin install PALETTE [--cursor] [--firefox] [--spotify] [--watch] [--restart-firefox] [--restart-spotify] [--size N]
   deckskin preview PALETTE [--out FILE]       cursor contact sheet PNG
 
 PALETTE is a name from palettes/ (ember, neon) or a path to a .toml file.
 """
 import argparse
+import json
 import os
+import shlex
 import shutil
 import signal
 import subprocess
@@ -20,6 +22,7 @@ HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, HERE)
 import deckskin_cursor as cursor  # noqa: E402
 import deckskin_firefox as firefox  # noqa: E402
+import deckskin_spotify as spotify  # noqa: E402
 
 DATA = os.path.join(os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")))
 BACKUPS = os.path.join(DATA, "deckskin", "backups")
@@ -56,7 +59,13 @@ def cmd_build(a):
         fh.write(content)
     with open(os.path.join(out, "firefox", "user.js"), "w") as fh:
         fh.write(firefox.prefs_block(pal))
-    say(f"built {dest}, {out}/firefox, {out}/cursors.png")
+    spot = os.path.join(out, "spotify", spotify.theme_name(pal))
+    os.makedirs(spot, exist_ok=True)
+    with open(os.path.join(spot, "color.ini"), "w") as fh:
+        fh.write(spotify.render_colors(pal, slug))
+    with open(os.path.join(spot, "user.css"), "w") as fh:
+        fh.write(spotify.render_css(pal, slug))
+    say(f"built {dest}, {out}/firefox, {out}/spotify, {out}/cursors.png")
 
 
 def cmd_preview(a):
@@ -178,20 +187,105 @@ def install_firefox(pal, slug, restart):
         say("Firefox relaunched")
 
 
+def launch_detached(args):
+    if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("hyprctl"):
+        line = shlex.join(args)
+        r = run(["hyprctl", "dispatch", f"hl.dsp.exec_cmd({json.dumps(line)})"])
+        if "ok" in r.stdout.lower():
+            return
+        r = run(["hyprctl", "dispatch", "exec", line])
+        if "ok" in r.stdout.lower():
+            return
+    subprocess.Popen(["setsid", "-f", *args], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def restart_spotify():
+    pid = spotify.main_pid()
+    if not pid:
+        say("Spotify isn't running: the theme loads the next time you open it")
+        return
+    args = spotify.launch_args(pid)
+    was_playing = run(["playerctl", "-p", "spotify", "status"]).stdout.strip() == "Playing" \
+        if shutil.which("playerctl") else False
+    say(f"closing Spotify (pid {pid})")
+    if not spotify.stop(pid):
+        sys.exit("Spotify didn't exit within 20 s; close it yourself and open it again")
+    time.sleep(0.5)
+    launch_detached(args)
+    say("Spotify relaunched")
+    if was_playing:
+        for _ in range(30):
+            time.sleep(1)
+            if run(["playerctl", "-p", "spotify", "status"]).returncode == 0:
+                time.sleep(2)
+                run(["playerctl", "-p", "spotify", "play"])
+                say("playback resumed")
+                break
+
+
+def install_spotify(pal, slug, restart, watch=False, required=True):
+    binary, spot = spotify.spicetify_bin(), spotify.spotify_dir()
+    if not binary or not spot:
+        missing = "Spicetify (https://spicetify.app)" if not binary else "a Spotify install"
+        if required:
+            sys.exit(f"the Spotify theme needs {missing}")
+        say(f"skipping the Spotify theme: {missing} not found")
+        return
+    cfg = spotify.config_dir(binary)
+    ini = os.path.join(cfg, "config-xpui.ini")
+    firefox.backup(ini, os.path.join(BACKUPS, "spotify"))
+    theme = spotify.theme_name(pal)
+    dest = spotify.write_theme(pal, slug, cfg)
+    try:
+        spotify.spicetify(binary, "config", "spotify_path", spot, "current_theme", theme, "color_scheme", slug,
+                          "replace_colors", "1", "inject_css", "1", "overwrite_assets", "0")
+        spotify.apply(binary, spot)
+    except RuntimeError as err:
+        sys.exit(str(err))
+    say(f"spotify theme -> {dest} (applied to {spot})")
+    if watch:
+        spotify.write_units(os.path.join(HERE, "deckskin"), spot)
+        run(["systemctl", "--user", "daemon-reload"])
+        run(["systemctl", "--user", "enable", "--now", f"{spotify.UNIT}.path"])
+        say(f"{spotify.UNIT}.path restores the theme after Spotify updates")
+    else:
+        say("Spotify updates remove the theme: re-run `deckskin spotify-reapply`, or install with --watch to automate it")
+    if restart:
+        restart_spotify()
+    elif spotify.main_pid():
+        say("Spotify is running: restart it to load the theme (or re-run with --restart-spotify)")
+
+
+def cmd_spotify_reapply(_):
+    """Re-patch after an update replaced Spotify's files (by hand, or from the --watch unit)."""
+    binary, spot = spotify.spicetify_bin(), spotify.spotify_dir()
+    if not binary or not spot:
+        sys.exit("Spicetify or Spotify not found")
+    try:
+        spotify.apply(binary, spot)
+    except RuntimeError as err:
+        sys.exit(str(err))
+    say("Spotify theme restored")
+    if spotify.main_pid() and shutil.which("notify-send"):
+        run(["notify-send", "Spotify updated", "Theme restored. Restart Spotify to see it."])
+
+
 def cmd_install(a):
     pal, slug = load(a.palette)
-    both = not (a.cursor or a.firefox)
-    if a.cursor or both:
+    every = not (a.cursor or a.firefox or a.spotify)
+    if a.cursor or every:
         install_cursor(pal, a.size)
-    if a.firefox or both:
+    if a.firefox or every:
         install_firefox(pal, slug, a.restart_firefox)
+    if a.spotify or every:
+        install_spotify(pal, slug, a.restart_spotify, watch=a.watch, required=a.spotify)
 
 
 def main():
     ap = argparse.ArgumentParser(prog="deckskin", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    b = sub.add_parser("build", help="build cursor theme + Firefox CSS into a folder")
+    b = sub.add_parser("build", help="build cursor theme + Firefox and Spotify CSS into a folder")
     b.add_argument("palette")
     b.add_argument("--out", default=os.path.join(HERE, "dist"))
     b.set_defaults(fn=cmd_build)
@@ -203,10 +297,17 @@ def main():
     i.add_argument("palette")
     i.add_argument("--cursor", action="store_true", help="only the cursor theme")
     i.add_argument("--firefox", action="store_true", help="only the Firefox theme")
+    i.add_argument("--spotify", action="store_true", help="only the Spotify theme (needs Spicetify)")
+    i.add_argument("--restart-spotify", action="store_true",
+                   help="close Spotify and reopen it, resuming playback if it was playing")
+    i.add_argument("--watch", action="store_true",
+                   help="also enable a systemd user unit that restores the Spotify theme after updates")
     i.add_argument("--restart-firefox", action="store_true",
                    help="close Firefox gracefully and reopen it with the session restored")
     i.add_argument("--size", type=int, default=24, help="cursor size (default 24)")
     i.set_defaults(fn=cmd_install)
+    r = sub.add_parser("spotify-reapply", help="re-patch Spotify after an update")
+    r.set_defaults(fn=cmd_spotify_reapply)
     a = ap.parse_args()
     a.fn(a)
 

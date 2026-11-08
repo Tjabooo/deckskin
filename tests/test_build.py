@@ -4,11 +4,13 @@ import sys
 import tempfile
 import tomllib
 import unittest
+import unittest.mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 import deckskin_cursor as cursor  # noqa: E402
 import deckskin_firefox as firefox  # noqa: E402
+import deckskin_spotify as spotify  # noqa: E402
 
 
 def palette(name):
@@ -17,6 +19,36 @@ def palette(name):
 
 
 class Build(unittest.TestCase):
+    def test_spotify_theme_uses_only_the_palette(self):
+        for slug in ("ember", "neon"):
+            pal = palette(slug)
+            ini = spotify.render_colors(pal, slug)
+            self.assertTrue(ini.startswith(f"[{slug}]"))
+            for key in ("text", "subtext", "main", "sidebar", "player", "card", "button", "selected-row"):
+                self.assertRegex(ini, rf"(?m)^{key}\s*= [0-9a-f]{{6}}$")
+            css = spotify.render_css(pal, slug)
+            self.assertNotIn("$", css)
+            self.assertIn(pal["colors"]["accent"], css)
+            self.assertNotIn("1ed760", css.lower())
+            self.assertEqual(css.count("{"), css.count("}"))
+
+    def test_spotify_equaliser_rotates_green_onto_the_accent(self):
+        self.assertIn("hue-rotate(-111deg)", spotify.equaliser_filter({"colors": {"accent": "#ff8000"}}))
+
+    def test_spotify_restart_drops_debug_flags(self):
+        with unittest.mock.patch("builtins.open") as fake:
+            fake.return_value.__enter__.return_value.read.return_value = (
+                b"/opt/spotify/spotify\0--ozone-platform=wayland\0--remote-debugging-port=9333\0"
+            )
+            self.assertEqual(spotify.launch_args(1), ["/opt/spotify/spotify", "--ozone-platform=wayland"])
+
+    def test_spotify_unpatched_means_the_spa_is_back(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "Apps"))
+            self.assertFalse(spotify.is_unpatched(d))
+            open(os.path.join(d, "Apps", "xpui.spa"), "w").close()
+            self.assertTrue(spotify.is_unpatched(d))
+
     def test_every_shape_renders_valid_svg(self):
         c = palette("ember")["colors"]
         for name in cursor.ALIASES:
