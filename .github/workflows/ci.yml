@@ -20,4 +20,5 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python -m compileall -q .
-      - run: pip install pytest && python -m pytest -q
+      - run: sudo apt-get update -q && sudo apt-get install -y -q librsvg2-bin
+      - run: pip install pillow pytest && python -m pytest -q
