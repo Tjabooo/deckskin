@@ -2,7 +2,6 @@
 import colorsys
 import os
 import shutil
-import signal
 import subprocess
 import time
 from string import Template
@@ -367,8 +366,9 @@ def launch_args(pid):
     return [a for a in args if not a.startswith(DEBUG_FLAGS)]
 
 
-def stop(pid, timeout=20):
-    os.kill(pid, signal.SIGTERM)
+def stop(timeout=20):
+    """TERM every spotify process: the main one ignores it until its helpers are gone. Playback state survives."""
+    subprocess.run(["pkill", "-x", "spotify"], capture_output=True)
     for _ in range(timeout * 5):
         if main_pid() is None:
             return True

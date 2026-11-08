@@ -208,7 +208,7 @@ def restart_spotify():
     was_playing = run(["playerctl", "-p", "spotify", "status"]).stdout.strip() == "Playing" \
         if shutil.which("playerctl") else False
     say(f"closing Spotify (pid {pid})")
-    if not spotify.stop(pid):
+    if not spotify.stop():
         sys.exit("Spotify didn't exit within 20 s; close it yourself and open it again")
     time.sleep(0.5)
     launch_detached(args)
